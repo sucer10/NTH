@@ -353,8 +353,8 @@
 
     /**
      * @description Update user validation counts in Object_Tracker__c.User_Record_Summary__c
-     * after successful record updates. This method uses the removeUpdatedFieldsFromPayloadBatch
-     * tracking to determine exactly how many records were completely resolved.
+     * after successful record updates. This method counts records that had missing fields
+     * and were successfully updated, checking if they still have missing fields after the update.
      * @param trackerId The Object_Tracker__c record ID
      * @param updatedFieldsByRecordId Map of record IDs to list of updated fields
      */
@@ -392,8 +392,8 @@
             Set<Id> recordIds = updatedFieldsByRecordId.keySet();
             Map<Id, Id> recordToOwnerMap = getRecordOwners(recordIds);
 
-            // Use the global tracking variable to get accurate resolved record counts
-            Map<Id, Integer> userToResolvedRecordsCount = getActualResolvedRecordsCount(recordToOwnerMap);
+            // Count how many records were completely resolved by checking payload
+            Map<Id, Integer> userToResolvedRecordsCount = getRecordsResolvedAfterUpdate(trackerId, updatedFieldsByRecordId, recordToOwnerMap);
 
             // Update the user validation counts
             Boolean hasChanges = false;
@@ -432,33 +432,75 @@
                 System.debug('Updated Object_Tracker__c User_Record_Summary__c: ' + tracker.User_Record_Summary__c);
             }
 
-            // Clear the tracking variable after use
-            resolvedRecordsTracker.clear();
-
         } catch (Exception e) {
             System.debug('Error in updateUserValidationCounts: ' + e.getMessage());
             // Don't throw exception to avoid breaking the main flow
         }
     }
 
-    // Static variable to track resolved records during payload processing
-    private static Map<Id, Integer> resolvedRecordsTracker = new Map<Id, Integer>();
-
     /**
-     * @description Get the actual resolved records count from the tracking variable
+     * @description Count how many records were completely resolved (no longer in payload) per user
+     * by checking the current payload after updates have been processed
+     * @param trackerId The Object_Tracker__c record ID
+     * @param updatedFieldsByRecordId Map of record IDs to list of updated fields
      * @param recordToOwnerMap Map of record ID to owner ID
      * @return Map of user ID to count of completely resolved records
      */
-    private static Map<Id, Integer> getActualResolvedRecordsCount(Map<Id, Id> recordToOwnerMap) {
+    private static Map<Id, Integer> getRecordsResolvedAfterUpdate(
+        Id trackerId, 
+        Map<Id, List<String>> updatedFieldsByRecordId, 
+        Map<Id, Id> recordToOwnerMap
+    ) {
         Map<Id, Integer> userToResolvedRecordsCount = new Map<Id, Integer>();
         
-        // Use the tracked data from removeUpdatedFieldsFromPayloadBatch
-        for (Id ownerId : resolvedRecordsTracker.keySet()) {
-            Integer resolvedCount = resolvedRecordsTracker.get(ownerId);
-            if (resolvedCount > 0) {
-                userToResolvedRecordsCount.put(ownerId, resolvedCount);
-                System.debug('Owner ' + ownerId + ' had ' + resolvedCount + ' records actually resolved (from tracker)');
+        try {
+            // Get owner IDs for the updated records
+            Set<Id> ownerIds = new Set<Id>(recordToOwnerMap.values());
+            
+            // Query Owner_based_Line_Items__c to check current payload state
+            List<Owner_based_Line_Items__c> items = [
+                SELECT Id, OwnerRecordId__c, Payload__c
+                FROM Owner_based_Line_Items__c
+                WHERE OwnerRecordId__c IN :ownerIds
+                AND Object_Line_Tracker__r.Object_Tracker__c = :trackerId
+                WITH SECURITY_ENFORCED
+            ];
+
+            // For each owner, check which updated records are no longer in their payload
+            for (Owner_based_Line_Items__c item : items) {
+                Id ownerId = item.OwnerRecordId__c;
+                Integer resolvedCount = 0;
+
+                // Check each record that was updated for this owner
+                for (Id recordId : updatedFieldsByRecordId.keySet()) {
+                    if (recordToOwnerMap.get(recordId) == ownerId) {
+                        // Check if this record is no longer in the payload (completely resolved)
+                        String recordIdStr = String.valueOf(recordId);
+                        Boolean recordStillInPayload = false;
+                        
+                        if (String.isNotBlank(item.Payload__c) && item.Payload__c != '{}' && item.Payload__c != '[]') {
+                            // More precise check - look for the exact record key pattern
+                            recordStillInPayload = item.Payload__c.contains('"' + recordIdStr + '":');
+                        }
+                        
+                        if (!recordStillInPayload) {
+                            // Record was completely resolved (all missing fields fixed)
+                            resolvedCount++;
+                            System.debug('Record ' + recordIdStr + ' was completely resolved for owner ' + ownerId);
+                        } else {
+                            System.debug('Record ' + recordIdStr + ' still has missing fields for owner ' + ownerId);
+                        }
+                    }
+                }
+
+                if (resolvedCount > 0) {
+                    userToResolvedRecordsCount.put(ownerId, resolvedCount);
+                    System.debug('Owner ' + ownerId + ' had ' + resolvedCount + ' records completely resolved');
+                }
             }
+
+        } catch (Exception e) {
+            System.debug('Error in getRecordsResolvedAfterUpdate: ' + e.getMessage());
         }
 
         return userToResolvedRecordsCount;
@@ -631,15 +673,7 @@
                             payloadStr = item.Payload__c == null ? '{}' : item.Payload__c;
                             toUpdate.add(item);
                             
-                            // Track the actual number of records resolved for this owner
-                            if (removedRecords > 0) {
-                                if (resolvedRecordsTracker.containsKey(item.OwnerRecordId__c)) {
-                                    resolvedRecordsTracker.put(item.OwnerRecordId__c, 
-                                        resolvedRecordsTracker.get(item.OwnerRecordId__c) + removedRecords);
-                                } else {
-                                    resolvedRecordsTracker.put(item.OwnerRecordId__c, removedRecords);
-                                }
-                            }
+
                             
                             System.debug('Owner ' + String.valueOf(item.OwnerRecordId__c) + ' Item ' + item.Id + ' (map) before=' + beforeCount + ' after=' + afterCount + ' removed=' + removedRecords);
                             // Avoid processing the same item again via string path which can cause duplicate DML IDs
@@ -759,15 +793,7 @@
                     }
                 }
                 
-                // Track the actual number of records resolved for this owner (string path)
-                if (removedRecordsStr > 0) {
-                    if (resolvedRecordsTracker.containsKey(item.OwnerRecordId__c)) {
-                        resolvedRecordsTracker.put(item.OwnerRecordId__c, 
-                            resolvedRecordsTracker.get(item.OwnerRecordId__c) + removedRecordsStr);
-                    } else {
-                        resolvedRecordsTracker.put(item.OwnerRecordId__c, removedRecordsStr);
-                    }
-                }
+
                 
                 System.debug('Owner ' + String.valueOf(item.OwnerRecordId__c) + ' Item ' + item.Id + ' (string) before=' + beforeCountStr + ' after=' + afterCountStr + ' removed=' + removedRecordsStr);
             }
