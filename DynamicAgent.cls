@@ -331,8 +331,14 @@
             }
         }
 
+        System.debug('🔧 VALIDATION COUNT DEBUG: Total updated records: ' + updatedFieldsPerRecord.size() + ', Clean records (no errors): ' + cleanUpdatedMap.size());
+        System.debug('🔧 Records with errors: ' + result.fieldErrors.keySet());
+        System.debug('🔧 Clean updated records: ' + cleanUpdatedMap.keySet());
+
         if (!cleanUpdatedMap.isEmpty()) {
             Set<String> objectNames = new Set<String>(objectTypePerRecord.values());
+            System.debug('🔧 Processing objects: ' + objectNames);
+            
             for (String obj : objectNames) {
                 List<Object_Tracker__c> trackers = [
                     SELECT Id FROM Object_Tracker__c
@@ -340,11 +346,18 @@
                     ORDER BY CreatedDate DESC LIMIT 1
                 ];
                 if (!trackers.isEmpty()) {
+                    System.debug('🔧 Found tracker for object ' + obj + ': ' + trackers[0].Id);
+                    System.debug('🔧 Calling removeUpdatedFieldsFromPayloadBatch...');
                     removeUpdatedFieldsFromPayloadBatch(trackers[0].Id, cleanUpdatedMap);
-                    // Update user validation counts after successful updates
+                    System.debug('🔧 Calling updateUserValidationCounts...');
                     updateUserValidationCounts(trackers[0].Id, cleanUpdatedMap);
+                    System.debug('🔧 Completed validation count update for tracker: ' + trackers[0].Id);
+                } else {
+                    System.debug('🔧 No tracker found for object: ' + obj);
                 }
             }
+        } else {
+            System.debug('🔧 No clean updated records to process - all records had errors');
         }
 
         result.hasErrors = !result.fieldErrors.isEmpty();
