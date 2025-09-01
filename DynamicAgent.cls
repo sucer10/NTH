@@ -470,12 +470,22 @@
             for (Owner_based_Line_Items__c item : items) {
                 Id ownerId = item.OwnerRecordId__c;
                 Integer resolvedCount = 0;
+                List<String> updatedRecordsForOwner = new List<String>();
+                List<String> resolvedRecordsForOwner = new List<String>();
+                List<String> stillMissingRecordsForOwner = new List<String>();
+
+                System.debug('=== DEBUGGING OWNER ' + ownerId + ' ===');
+                System.debug('Payload length: ' + (item.Payload__c != null ? item.Payload__c.length() : 0));
+                System.debug('Payload preview (first 500 chars): ' + (item.Payload__c != null && item.Payload__c.length() > 500 ? item.Payload__c.substring(0, 500) + '...' : item.Payload__c));
 
                 // Check each record that was updated for this owner
                 for (Id recordId : updatedFieldsByRecordId.keySet()) {
                     if (recordToOwnerMap.get(recordId) == ownerId) {
-                        // Check if this record is no longer in the payload (completely resolved)
                         String recordIdStr = String.valueOf(recordId);
+                        updatedRecordsForOwner.add(recordIdStr);
+                        List<String> updatedFields = updatedFieldsByRecordId.get(recordId);
+                        
+                        // Check if this record is no longer in the payload (completely resolved)
                         Boolean recordStillInPayload = false;
                         
                         if (String.isNotBlank(item.Payload__c) && item.Payload__c != '{}' && item.Payload__c != '[]') {
@@ -486,16 +496,35 @@
                         if (!recordStillInPayload) {
                             // Record was completely resolved (all missing fields fixed)
                             resolvedCount++;
-                            System.debug('Record ' + recordIdStr + ' was completely resolved for owner ' + ownerId);
+                            resolvedRecordsForOwner.add(recordIdStr);
+                            System.debug('✅ Record ' + recordIdStr + ' was COMPLETELY RESOLVED for owner ' + ownerId + ' (Updated fields: ' + updatedFields + ')');
                         } else {
-                            System.debug('Record ' + recordIdStr + ' still has missing fields for owner ' + ownerId);
+                            stillMissingRecordsForOwner.add(recordIdStr);
+                            System.debug('⚠️  Record ' + recordIdStr + ' STILL HAS MISSING FIELDS for owner ' + ownerId + ' (Updated fields: ' + updatedFields + ')');
+                            
+                            // Try to extract what fields are still missing for this record
+                            if (item.Payload__c.contains('"' + recordIdStr + '":')) {
+                                Integer startPos = item.Payload__c.indexOf('"' + recordIdStr + '":');
+                                Integer arrayStart = item.Payload__c.indexOf('[', startPos);
+                                Integer arrayEnd = item.Payload__c.indexOf(']', arrayStart);
+                                if (arrayStart != -1 && arrayEnd != -1 && arrayEnd > arrayStart) {
+                                    String fieldsArray = item.Payload__c.substring(arrayStart + 1, arrayEnd);
+                                    System.debug('   Still missing fields for ' + recordIdStr + ': ' + fieldsArray);
+                                }
+                            }
                         }
                     }
                 }
 
+                System.debug('SUMMARY FOR OWNER ' + ownerId + ':');
+                System.debug('- Total updated records: ' + updatedRecordsForOwner.size() + ' → ' + updatedRecordsForOwner);
+                System.debug('- Completely resolved: ' + resolvedRecordsForOwner.size() + ' → ' + resolvedRecordsForOwner);
+                System.debug('- Still have missing fields: ' + stillMissingRecordsForOwner.size() + ' → ' + stillMissingRecordsForOwner);
+                System.debug('=== END DEBUGGING OWNER ' + ownerId + ' ===');
+
                 if (resolvedCount > 0) {
                     userToResolvedRecordsCount.put(ownerId, resolvedCount);
-                    System.debug('Owner ' + ownerId + ' had ' + resolvedCount + ' records completely resolved');
+                    System.debug('🎯 Owner ' + ownerId + ' had ' + resolvedCount + ' records completely resolved - COUNT WILL DECREASE BY ' + resolvedCount);
                 }
             }
 
