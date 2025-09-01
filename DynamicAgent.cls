@@ -338,22 +338,37 @@
         if (!cleanUpdatedMap.isEmpty()) {
             Set<String> objectNames = new Set<String>(objectTypePerRecord.values());
             System.debug('🔧 Processing objects: ' + objectNames);
+            System.debug('🔧 Clean updated map contains: ' + cleanUpdatedMap.keySet());
             
             for (String obj : objectNames) {
-                List<Object_Tracker__c> trackers = [
-                    SELECT Id FROM Object_Tracker__c
-                    WHERE Name = :obj
-                    ORDER BY CreatedDate DESC LIMIT 1
-                ];
-                if (!trackers.isEmpty()) {
-                    System.debug('🔧 Found tracker for object ' + obj + ': ' + trackers[0].Id);
-                    System.debug('🔧 Calling removeUpdatedFieldsFromPayloadBatch...');
-                    removeUpdatedFieldsFromPayloadBatch(trackers[0].Id, cleanUpdatedMap);
-                    System.debug('🔧 Calling updateUserValidationCounts...');
-                    updateUserValidationCounts(trackers[0].Id, cleanUpdatedMap);
-                    System.debug('🔧 Completed validation count update for tracker: ' + trackers[0].Id);
+                // Filter cleanUpdatedMap to only include records of this object type
+                Map<Id, List<String>> objectSpecificUpdates = new Map<Id, List<String>>();
+                for (Id recordId : cleanUpdatedMap.keySet()) {
+                    String recordObjectType = recordId.getSObjectType().getDescribe().getName();
+                    if (recordObjectType == obj) {
+                        objectSpecificUpdates.put(recordId, cleanUpdatedMap.get(recordId));
+                    }
+                }
+                
+                if (!objectSpecificUpdates.isEmpty()) {
+                    List<Object_Tracker__c> trackers = [
+                        SELECT Id FROM Object_Tracker__c
+                        WHERE Name = :obj
+                        ORDER BY CreatedDate DESC LIMIT 1
+                    ];
+                    if (!trackers.isEmpty()) {
+                        System.debug('🔧 Found tracker for object ' + obj + ': ' + trackers[0].Id);
+                        System.debug('🔧 Processing ' + objectSpecificUpdates.size() + ' records for this object: ' + objectSpecificUpdates.keySet());
+                        System.debug('🔧 Calling removeUpdatedFieldsFromPayloadBatch...');
+                        removeUpdatedFieldsFromPayloadBatch(trackers[0].Id, objectSpecificUpdates);
+                        System.debug('🔧 Calling updateUserValidationCounts...');
+                        updateUserValidationCounts(trackers[0].Id, objectSpecificUpdates);
+                        System.debug('🔧 Completed validation count update for tracker: ' + trackers[0].Id);
+                    } else {
+                        System.debug('🔧 No tracker found for object: ' + obj);
+                    }
                 } else {
-                    System.debug('🔧 No tracker found for object: ' + obj);
+                    System.debug('🔧 No records of type ' + obj + ' in clean updated map');
                 }
             }
         } else {
