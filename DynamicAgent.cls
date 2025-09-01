@@ -416,6 +416,8 @@
                                 userValidationMap.put(userIdStr, newValue);
                                 hasChanges = true;
                                 
+                                System.debug('Updated user validation for ' + userIdStr + ': ' + currentValue + ' -> ' + newValue + ' (Resolved ' + resolvedRecords + ' records completely)');
+                                
 
                             } catch (Exception e) {
                                 System.debug('Error updating count for user ' + userIdStr + ': ' + e.getMessage());
@@ -518,6 +520,7 @@
 
                 if (resolvedCount > 0) {
                     userToResolvedRecordsCount.put(ownerId, resolvedCount);
+                    System.debug('🎯 Owner ' + ownerId + ' had ' + resolvedCount + ' records completely resolved - COUNT WILL DECREASE BY ' + resolvedCount);
                 }
             }
 
