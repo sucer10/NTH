@@ -493,36 +493,55 @@
                         updatedRecordsForOwner.add(recordIdStr);
                         List<String> updatedFields = updatedFieldsByRecordId.get(recordId);
                         
-                        // Check if this record is still in ANY of the owner's payloads
-                        Boolean recordStillInAnyPayload = false;
+                        // Check if ANY of the updated fields are still missing in the payloads
+                        Boolean anyUpdatedFieldStillMissing = false;
+                        List<String> stillMissingUpdatedFields = new List<String>();
                         
                         for (Owner_based_Line_Items__c item : ownerPayloads) {
                             if (String.isNotBlank(item.Payload__c) && item.Payload__c != '{}' && item.Payload__c != '[]') {
                                 if (item.Payload__c.contains('"' + recordIdStr + '":')) {
-                                    recordStillInAnyPayload = true;
-                                    System.debug('   Record ' + recordIdStr + ' found in payload item ' + item.Id + ' (length: ' + item.Payload__c.length() + ')');
-                                    
-                                    // Extract what fields are still missing
+                                    // Extract the missing fields for this record
                                     Integer startPos = item.Payload__c.indexOf('"' + recordIdStr + '":');
                                     Integer arrayStart = item.Payload__c.indexOf('[', startPos);
                                     Integer arrayEnd = item.Payload__c.indexOf(']', arrayStart);
                                     if (arrayStart != -1 && arrayEnd != -1 && arrayEnd > arrayStart) {
                                         String fieldsArray = item.Payload__c.substring(arrayStart + 1, arrayEnd);
-                                        System.debug('   Still missing fields for ' + recordIdStr + ': ' + fieldsArray);
+                                        String[] missingFieldsArray = fieldsArray.replace('"', '').split(',');
+                                        
+                                        // Convert to lowercase for comparison
+                                        Set<String> missingFieldsSet = new Set<String>();
+                                        for (String field : missingFieldsArray) {
+                                            if (String.isNotBlank(field.trim())) {
+                                                missingFieldsSet.add(field.trim().toLowerCase());
+                                            }
+                                        }
+                                        
+                                        // Check if any of the updated fields are still in the missing fields
+                                        for (String updatedField : updatedFields) {
+                                            String updatedFieldLower = updatedField.toLowerCase();
+                                            if (missingFieldsSet.contains(updatedFieldLower)) {
+                                                anyUpdatedFieldStillMissing = true;
+                                                stillMissingUpdatedFields.add(updatedField);
+                                            }
+                                        }
+                                        
+                                        System.debug('   Record ' + recordIdStr + ' found in payload item ' + item.Id);
+                                        System.debug('   All missing fields in payload: ' + fieldsArray);
+                                        System.debug('   Updated fields that are still missing: ' + stillMissingUpdatedFields);
                                     }
-                                    break; // Found in one payload, no need to check others
+                                    break; // Found the record, no need to check other payloads
                                 }
                             }
                         }
                         
-                        if (!recordStillInAnyPayload) {
-                            // Record was completely resolved (not found in any payload)
+                        if (!anyUpdatedFieldStillMissing) {
+                            // All updated fields have been resolved (none of the updated fields are still missing)
                             resolvedCount++;
                             resolvedRecordsForOwner.add(recordIdStr);
-                            System.debug('✅ Record ' + recordIdStr + ' was COMPLETELY RESOLVED for owner ' + ownerId + ' (Updated fields: ' + updatedFields + ')');
+                            System.debug('✅ Record ' + recordIdStr + ' - ALL UPDATED FIELDS RESOLVED for owner ' + ownerId + ' (Updated fields: ' + updatedFields + ')');
                         } else {
                             stillMissingRecordsForOwner.add(recordIdStr);
-                            System.debug('⚠️  Record ' + recordIdStr + ' STILL HAS MISSING FIELDS for owner ' + ownerId + ' (Updated fields: ' + updatedFields + ')');
+                            System.debug('⚠️  Record ' + recordIdStr + ' - SOME UPDATED FIELDS STILL MISSING for owner ' + ownerId + ' (Updated fields: ' + updatedFields + ', Still missing: ' + stillMissingUpdatedFields + ')');
                         }
                     }
                 }
