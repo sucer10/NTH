@@ -337,6 +337,7 @@
 
         if (!cleanUpdatedMap.isEmpty()) {
             Set<String> objectNames = new Set<String>(objectTypePerRecord.values());
+            System.debug('🔧 DEBUG: objectTypePerRecord map: ' + objectTypePerRecord);
             System.debug('🔧 Processing objects: ' + objectNames);
             System.debug('🔧 Clean updated map contains: ' + cleanUpdatedMap.keySet());
             
