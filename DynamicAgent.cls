@@ -416,7 +416,7 @@
                                 userValidationMap.put(userIdStr, newValue);
                                 hasChanges = true;
                                 
-                                System.debug('Updated user validation for ' + userIdStr + ': ' + currentValue + ' -> ' + newValue + ' (Resolved ' + resolvedRecords + ' records completely)');
+
                             } catch (Exception e) {
                                 System.debug('Error updating count for user ' + userIdStr + ': ' + e.getMessage());
                             }
@@ -429,7 +429,6 @@
             if (hasChanges) {
                 tracker.User_Record_Summary__c = JSON.serialize(userValidationMap);
                 update tracker;
-                System.debug('Updated Object_Tracker__c User_Record_Summary__c: ' + tracker.User_Record_Summary__c);
             }
 
         } catch (Exception e) {
@@ -484,7 +483,7 @@
                 List<String> resolvedRecordsForOwner = new List<String>();
                 List<String> stillMissingRecordsForOwner = new List<String>();
 
-                System.debug('=== DEBUGGING OWNER ' + ownerId + ' (' + ownerPayloads.size() + ' payload items) ===');
+
 
                 // Check each record that was updated for this owner
                 for (Id recordId : updatedFieldsByRecordId.keySet()) {
@@ -495,36 +494,13 @@
                         
                         // Check if this record is still in ANY of the owner's payloads
                         Boolean recordStillInAnyPayload = false;
-                        String foundInPayloadId = '';
-                        Integer payloadLength = 0;
-                        
-                        System.debug('🔍 Checking record ' + recordIdStr + ' across ' + ownerPayloads.size() + ' payload items...');
                         
                         for (Owner_based_Line_Items__c item : ownerPayloads) {
-                            System.debug('   Checking payload item ' + item.Id + ' (length: ' + (item.Payload__c != null ? item.Payload__c.length() : 0) + ')');
-                            
                             if (String.isNotBlank(item.Payload__c) && item.Payload__c != '{}' && item.Payload__c != '[]') {
                                 if (item.Payload__c.contains('"' + recordIdStr + '":')) {
                                     recordStillInAnyPayload = true;
-                                    foundInPayloadId = item.Id;
-                                    payloadLength = item.Payload__c.length();
-                                    
-                                    System.debug('   ✋ FOUND: Record ' + recordIdStr + ' exists in payload item ' + item.Id + ' (length: ' + payloadLength + ')');
-                                    
-                                    // Extract what fields are still missing
-                                    Integer startPos = item.Payload__c.indexOf('"' + recordIdStr + '":');
-                                    Integer arrayStart = item.Payload__c.indexOf('[', startPos);
-                                    Integer arrayEnd = item.Payload__c.indexOf(']', arrayStart);
-                                    if (arrayStart != -1 && arrayEnd != -1 && arrayEnd > arrayStart) {
-                                        String fieldsArray = item.Payload__c.substring(arrayStart + 1, arrayEnd);
-                                        System.debug('   Still missing fields for ' + recordIdStr + ': ' + fieldsArray);
-                                    }
                                     break; // Found in one payload, no need to check others
-                                } else {
-                                    System.debug('   ✅ NOT FOUND: Record ' + recordIdStr + ' not in payload item ' + item.Id);
                                 }
-                            } else {
-                                System.debug('   ⭕ EMPTY: Payload item ' + item.Id + ' is empty or null');
                             }
                         }
                         
@@ -532,25 +508,16 @@
                             // Record was completely removed from ALL payloads (all missing fields resolved)
                             resolvedCount++;
                             resolvedRecordsForOwner.add(recordIdStr);
-                            System.debug('✅ Record ' + recordIdStr + ' was COMPLETELY RESOLVED for owner ' + ownerId + ' (Updated fields: ' + updatedFields + ')');
-                            System.debug('   📊 RESOLUTION CONFIRMED: Record not found in any of the ' + ownerPayloads.size() + ' payload items');
                         } else {
                             stillMissingRecordsForOwner.add(recordIdStr);
-                            System.debug('⚠️  Record ' + recordIdStr + ' STILL HAS MISSING FIELDS for owner ' + ownerId + ' (Updated fields: ' + updatedFields + ')');
-                            System.debug('   📍 STILL EXISTS: Found in payload item ' + foundInPayloadId + ' (length: ' + payloadLength + ')');
                         }
                     }
                 }
 
-                System.debug('SUMMARY FOR OWNER ' + ownerId + ':');
-                System.debug('- Total updated records: ' + updatedRecordsForOwner.size() + ' → ' + updatedRecordsForOwner);
-                System.debug('- Completely resolved: ' + resolvedRecordsForOwner.size() + ' → ' + resolvedRecordsForOwner);
-                System.debug('- Still have missing fields: ' + stillMissingRecordsForOwner.size() + ' → ' + stillMissingRecordsForOwner);
-                System.debug('=== END DEBUGGING OWNER ' + ownerId + ' ===');
+
 
                 if (resolvedCount > 0) {
                     userToResolvedRecordsCount.put(ownerId, resolvedCount);
-                    System.debug('🎯 Owner ' + ownerId + ' had ' + resolvedCount + ' records completely resolved - COUNT WILL DECREASE BY ' + resolvedCount);
                 }
             }
 
