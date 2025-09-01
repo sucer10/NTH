@@ -354,6 +354,8 @@
     /**
      * @description Update user validation counts in Object_Tracker__c.User_Record_Summary__c
      * after successful record updates. Decreases the missing count for users who had records updated.
+     * This method counts records that were completely resolved (no more missing fields) by 
+     * checking the payload updates to see which records were fully removed.
      * @param trackerId The Object_Tracker__c record ID
      * @param updatedFieldsByRecordId Map of record IDs to list of updated fields
      */
@@ -391,23 +393,12 @@
             Set<Id> recordIds = updatedFieldsByRecordId.keySet();
             Map<Id, Id> recordToOwnerMap = getRecordOwners(recordIds);
 
-            // Count how many fields were updated per user
-            Map<Id, Integer> userToUpdatedFieldsCount = new Map<Id, Integer>();
-            for (Id recordId : updatedFieldsByRecordId.keySet()) {
-                Id ownerId = recordToOwnerMap.get(recordId);
-                if (ownerId != null) {
-                    Integer fieldCount = updatedFieldsByRecordId.get(recordId).size();
-                    if (userToUpdatedFieldsCount.containsKey(ownerId)) {
-                        userToUpdatedFieldsCount.put(ownerId, userToUpdatedFieldsCount.get(ownerId) + fieldCount);
-                    } else {
-                        userToUpdatedFieldsCount.put(ownerId, fieldCount);
-                    }
-                }
-            }
+            // Count records that were completely resolved (removed from payload) per user
+            Map<Id, Integer> userToResolvedRecordsCount = getResolvedRecordsCount(trackerId, updatedFieldsByRecordId, recordToOwnerMap);
 
             // Update the user validation counts
             Boolean hasChanges = false;
-            for (Id userId : userToUpdatedFieldsCount.keySet()) {
+            for (Id userId : userToResolvedRecordsCount.keySet()) {
                 String userIdStr = String.valueOf(userId);
                 if (userValidationMap.containsKey(userIdStr)) {
                     String currentValue = String.valueOf(userValidationMap.get(userIdStr));
@@ -417,16 +408,16 @@
                             try {
                                 Integer currentMissing = Integer.valueOf(parts[0]);
                                 Integer totalRecords = Integer.valueOf(parts[1]);
-                                Integer updatedFields = userToUpdatedFieldsCount.get(userId);
+                                Integer resolvedRecords = userToResolvedRecordsCount.get(userId);
                                 
-                                // Decrease missing count by the number of fields updated
-                                Integer newMissing = Math.max(0, currentMissing - updatedFields);
+                                // Decrease missing count by the number of records that were completely resolved
+                                Integer newMissing = Math.max(0, currentMissing - resolvedRecords);
                                 
                                 String newValue = newMissing + '/' + totalRecords;
                                 userValidationMap.put(userIdStr, newValue);
                                 hasChanges = true;
                                 
-                                System.debug('Updated user validation for ' + userIdStr + ': ' + currentValue + ' -> ' + newValue);
+                                System.debug('Updated user validation for ' + userIdStr + ': ' + currentValue + ' -> ' + newValue + ' (Resolved ' + resolvedRecords + ' records completely)');
                             } catch (Exception e) {
                                 System.debug('Error updating count for user ' + userIdStr + ': ' + e.getMessage());
                             }
@@ -446,6 +437,68 @@
             System.debug('Error in updateUserValidationCounts: ' + e.getMessage());
             // Don't throw exception to avoid breaking the main flow
         }
+    }
+
+    /**
+     * @description Count how many records were completely resolved (removed from payload) per user
+     * by analyzing the Owner_based_Line_Items__c payload changes
+     * @param trackerId The Object_Tracker__c record ID
+     * @param updatedFieldsByRecordId Map of record IDs to list of updated fields
+     * @param recordToOwnerMap Map of record ID to owner ID
+     * @return Map of user ID to count of completely resolved records
+     */
+    private static Map<Id, Integer> getResolvedRecordsCount(
+        Id trackerId, 
+        Map<Id, List<String>> updatedFieldsByRecordId, 
+        Map<Id, Id> recordToOwnerMap
+    ) {
+        Map<Id, Integer> userToResolvedRecordsCount = new Map<Id, Integer>();
+        
+        try {
+            // Get owner IDs for the updated records
+            Set<Id> ownerIds = new Set<Id>(recordToOwnerMap.values());
+            
+            // Query Owner_based_Line_Items__c to check which records were completely removed
+            List<Owner_based_Line_Items__c> items = [
+                SELECT Id, OwnerRecordId__c, Payload__c
+                FROM Owner_based_Line_Items__c
+                WHERE OwnerRecordId__c IN :ownerIds
+                AND Object_Line_Tracker__r.Object_Tracker__c = :trackerId
+                WITH SECURITY_ENFORCED
+            ];
+
+            // Check each owner's payload to see which records are no longer present
+            for (Owner_based_Line_Items__c item : items) {
+                if (String.isBlank(item.Payload__c)) {
+                    continue;
+                }
+
+                Id ownerId = item.OwnerRecordId__c;
+                Integer resolvedCount = 0;
+
+                // Check which of the updated records belonging to this owner are no longer in the payload
+                for (Id recordId : updatedFieldsByRecordId.keySet()) {
+                    if (recordToOwnerMap.get(recordId) == ownerId) {
+                        // Check if this record is still in the payload
+                        String recordIdStr = String.valueOf(recordId);
+                        if (!item.Payload__c.contains('"' + recordIdStr + '"')) {
+                            // Record was completely removed from payload (all missing fields resolved)
+                            resolvedCount++;
+                        }
+                    }
+                }
+
+                if (resolvedCount > 0) {
+                    userToResolvedRecordsCount.put(ownerId, resolvedCount);
+                    System.debug('Owner ' + ownerId + ' had ' + resolvedCount + ' records completely resolved');
+                }
+            }
+
+        } catch (Exception e) {
+            System.debug('Error in getResolvedRecordsCount: ' + e.getMessage());
+        }
+
+        return userToResolvedRecordsCount;
     }
 
     /**
