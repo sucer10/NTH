@@ -488,9 +488,15 @@
     ) {
         Map<Id, Integer> userToResolvedRecordsCount = new Map<Id, Integer>();
         
+        System.debug('🚀 getRecordsResolvedAfterUpdate STARTED');
+        System.debug('🚀 trackerId: ' + trackerId);
+        System.debug('🚀 updatedFieldsByRecordId: ' + updatedFieldsByRecordId.keySet());
+        System.debug('🚀 recordToOwnerMap: ' + recordToOwnerMap);
+        
         try {
             // Get owner IDs for the updated records
             Set<Id> ownerIds = new Set<Id>(recordToOwnerMap.values());
+            System.debug('🚀 ownerIds to query: ' + ownerIds);
             
             // Query Owner_based_Line_Items__c to check current payload state
             List<Owner_based_Line_Items__c> items = [
