@@ -530,11 +530,16 @@
                         
                         // Check if this record is still in ANY of the owner's payloads
                         Boolean recordStillInAnyPayload = false;
+                        String foundInPayloadId = '';
+                        
+                        System.debug('🔍 Checking if record ' + recordIdStr + ' exists in any payload...');
                         
                         for (Owner_based_Line_Items__c item : ownerPayloads) {
                             if (String.isNotBlank(item.Payload__c) && item.Payload__c != '{}' && item.Payload__c != '[]') {
                                 if (item.Payload__c.contains('"' + recordIdStr + '":')) {
                                     recordStillInAnyPayload = true;
+                                    foundInPayloadId = item.Id;
+                                    System.debug('❌ Record ' + recordIdStr + ' STILL EXISTS in payload ' + item.Id + ' (length: ' + item.Payload__c.length() + ')');
                                     break; // Found in one payload, no need to check others
                                 }
                             }
@@ -544,8 +549,10 @@
                             // Record was completely removed from ALL payloads (all missing fields resolved)
                             resolvedCount++;
                             resolvedRecordsForOwner.add(recordIdStr);
+                            System.debug('✅ Record ' + recordIdStr + ' COMPLETELY RESOLVED - not found in any payload');
                         } else {
                             stillMissingRecordsForOwner.add(recordIdStr);
+                            System.debug('⚠️ Record ' + recordIdStr + ' STILL HAS MISSING FIELDS - found in payload ' + foundInPayloadId);
                         }
                     }
                 }
