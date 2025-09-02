@@ -662,14 +662,21 @@
             objectTypeToRecordIds.get(objApi).add(recId);
         }
 
-        // Query records to get OwnerId for a single object type to reduce heap usage
+        // Query records to get OwnerId for ALL object types
         Map<Id, SObject> recs = new Map<Id, SObject>();
-        if (!objectTypeToRecordIds.isEmpty()) {
-            String objApi = objectTypeToRecordIds.keySet().iterator().next();
+        for (String objApi : objectTypeToRecordIds.keySet()) {
             Set<Id> ids = objectTypeToRecordIds.get(objApi);
             if (!ids.isEmpty()) {
-                String soql = String.escapeSingleQuotes('SELECT Id, OwnerId FROM ' + objApi + ' WHERE Id IN :ids');
-                recs.putAll(new Map<Id, SObject>(Database.query(soql)));
+                try {
+                    String soql = 'SELECT Id, OwnerId FROM ' + String.escapeSingleQuotes(objApi) + ' WHERE Id IN :ids WITH SECURITY_ENFORCED';
+                    List<SObject> records = Database.query(soql);
+                    for (SObject record : records) {
+                        recs.put((Id)record.get('Id'), record);
+                    }
+                    System.debug('🔧 PAYLOAD PROCESSING: Queried ' + records.size() + ' records for object type: ' + objApi);
+                } catch (Exception e) {
+                    System.debug('🔧 PAYLOAD PROCESSING ERROR: Failed to query object type ' + objApi + ': ' + e.getMessage());
+                }
             }
         }
 
@@ -697,13 +704,18 @@
         // Process each item once to avoid multiple deserializations
         for (Owner_based_Line_Items__c item : items) {
             if (String.isBlank(item.Payload__c)){
+                System.debug('🔧 PAYLOAD PROCESSING: Skipping item ' + item.Id + ' - blank payload');
                 continue;
             }
 
             // Check payload size - use string operations for large payloads instead of skipping
             Boolean isLargePayload = item.Payload__c.length() > 25000;
+            System.debug('🔧 PAYLOAD PROCESSING: Processing item ' + item.Id + ' for owner ' + item.OwnerRecordId__c + ' (length: ' + item.Payload__c.length() + ', isLarge: ' + isLargePayload + ')');
+            
             if (isLargePayload) {
-                System.debug('Processing large payload with string operations: ' + item.Id + ' size: ' + item.Payload__c.length());
+                System.debug('🔧 PAYLOAD PROCESSING: Using STRING operations for large payload: ' + item.Id + ' size: ' + item.Payload__c.length());
+            } else {
+                System.debug('🔧 PAYLOAD PROCESSING: Using MAP operations for small payload: ' + item.Id + ' size: ' + item.Payload__c.length());
             }
 
             // Process payload; prefer small-payload Map-based path, fall back to string ops for larger payloads
@@ -715,13 +727,26 @@
                          // Try Map-based approach first for small payloads only
              if (!isLargePayload && item.Payload__c.length() <= 12000) {
                 try {
+                    System.debug('🔍 MAP PROCESSING: Processing payload for item ' + item.Id + ' (length: ' + item.Payload__c.length() + ')');
                     Map<String, Object> payload = (Map<String, Object>) JSON.deserializeUntyped(payloadStr);
                     if (payload != null) {
                         Integer beforeCount = payload.size();
                         List<Id> recList = ownerToRecordIds.containsKey(item.OwnerRecordId__c) ? ownerToRecordIds.get(item.OwnerRecordId__c) : new List<Id>();
+                        System.debug('🔍 MAP PROCESSING: Processing ' + recList.size() + ' records for owner: ' + item.OwnerRecordId__c);
+                        
                         for (Id recId : recList) {
                             String recKey = (String)recId;
+                            System.debug('🔍 MAP PROCESSING: Looking for record ' + recKey + ' in payload');
+                            
+                            // Only process records that were actually updated
+                            if (!updatedFieldsByRecordId.containsKey(recId)) {
+                                System.debug('🔍 MAP PROCESSING: Skipping record ' + recKey + ' - not in updated fields map');
+                                continue;
+                            }
+                            
                             if (payload.containsKey(recKey)) {
+                                System.debug('🔍 MAP PROCESSING: Found record ' + recKey + ' in payload');
+                                
                                 List<Object> missingFieldsObj = (List<Object>) payload.get(recKey);
                                 List<String> missingFields = new List<String>();
                                 if (missingFieldsObj != null) {
@@ -729,19 +754,31 @@
                                         missingFields.add(String.valueOf(o));
                                     }
                                 }
+                                
+                                System.debug('🔍 MAP PROCESSING: Missing fields for ' + recKey + ': ' + missingFields);
+                                
                                 List<String> upd = updatedFieldsByRecordId.get(recId);
+                                System.debug('🔍 MAP PROCESSING: Fields to remove for ' + recKey + ': ' + upd);
+                                
                                 if (upd != null) {
+                                    List<String> fieldsBeforeRemoval = new List<String>(missingFields);
                                     for (String field : upd) {
                                         for (Integer i = missingFields.size() - 1; i >= 0; i--) {
                                             if (missingFields[i] == field) {
+                                                System.debug('🔍 MAP PROCESSING: Removing field "' + field + '" from missing fields');
                                                 missingFields.remove(i);
                                             }
                                         }
                                     }
+                                    System.debug('🔍 MAP PROCESSING: Missing fields BEFORE removal: ' + fieldsBeforeRemoval);
+                                    System.debug('🔍 MAP PROCESSING: Missing fields AFTER removal: ' + missingFields);
                                 }
+                                
                                 if (missingFields.isEmpty()) {
+                                    System.debug('✅ MAP PROCESSING: Removing entire record ' + recKey + ' from payload');
                                     payload.remove(recKey);
                                 } else {
+                                    System.debug('⚠️ MAP PROCESSING: Updating record ' + recKey + ' with remaining fields: ' + missingFields);
                                     List<Object> newMissingFieldsObj = new List<Object>();
                                     for (String s : missingFields) {
                                         newMissingFieldsObj.add(s);
@@ -749,6 +786,8 @@
                                     payload.put(recKey, newMissingFieldsObj);
                                 }
                                 changed = true;
+                            } else {
+                                System.debug('🔍 MAP PROCESSING: Record ' + recKey + ' NOT found in payload');
                             }
                         }
                         if (changed) {
@@ -760,12 +799,13 @@
                             
 
                             
-                            System.debug('Owner ' + String.valueOf(item.OwnerRecordId__c) + ' Item ' + item.Id + ' (map) before=' + beforeCount + ' after=' + afterCount + ' removed=' + removedRecords);
+                            System.debug('✅ MAP PROCESSING: Owner ' + String.valueOf(item.OwnerRecordId__c) + ' Item ' + item.Id + ' (map) before=' + beforeCount + ' after=' + afterCount + ' removed=' + removedRecords);
                             // Avoid processing the same item again via string path which can cause duplicate DML IDs
                             continue;
                         }
                     }
                 } catch (Exception ex) {
+                    System.debug('🔍 MAP PROCESSING ERROR: Failed to process payload with Map approach: ' + ex.getMessage() + '. Falling back to string processing.');
                     changed = false; // fallback to string path below
                 }
             }
@@ -786,10 +826,21 @@
             for (Id recId : ownerRecIds) {
                 if (changed) { break; }
                 String recIdStr = (String)recId;
-                                if (payloadStr.contains('"' + recIdStr + '"')) {
+                System.debug('🔍 STRING PROCESSING: Looking for record ' + recIdStr + ' in payload (length: ' + payloadStr.length() + ')');
+                
+                // Only process records that were actually updated
+                if (!updatedFieldsByRecordId.containsKey(recId)) {
+                    System.debug('🔍 STRING PROCESSING: Skipping record ' + recIdStr + ' - not in updated fields map');
+                    continue;
+                }
+                
+                if (payloadStr.contains('"' + recIdStr + '"')) {
+                    System.debug('🔍 STRING PROCESSING: Found record ' + recIdStr + ' in payload');
+                    
                     // Find the record entry in the JSON string using Apex methods
                     String searchKey = '"' + recIdStr + '":';
                     Integer startIndex = payloadStr.indexOf(searchKey);
+                    System.debug('🔍 STRING PROCESSING: Search key "' + searchKey + '" found at index: ' + startIndex);
 
                     if (startIndex != -1) {
                         // Find the opening bracket after the key
@@ -800,6 +851,8 @@
                             if (bracketEnd != -1) {
                                 // Extract the fields string
                                 String fieldsStr = payloadStr.substring(bracketStart + 1, bracketEnd);
+                                System.debug('🔍 STRING PROCESSING: Fields string for ' + recIdStr + ': "' + fieldsStr + '"');
+                                
                                 List<String> missingFields = new List<String>();
 
                                 // Parse fields from the string
@@ -812,19 +865,29 @@
                                         }
                                     }
                                 }
+                                
+                                System.debug('🔍 STRING PROCESSING: Parsed missing fields for ' + recIdStr + ': ' + missingFields);
+                                System.debug('🔍 STRING PROCESSING: Fields to remove: ' + updatedFieldsByRecordId.get(recId));
 
                                 // Remove updated fields
+                                List<String> fieldsBeforeRemoval = new List<String>(missingFields);
                                 for (String field : updatedFieldsByRecordId.get(recId)) {
                                     // Remove all occurrences of the field
                                     for (Integer i = missingFields.size() - 1; i >= 0; i--) {
                                         if (missingFields[i] == field) {
+                                            System.debug('🔍 STRING PROCESSING: Removing field "' + field + '" from missing fields');
                                             missingFields.remove(i);
                                         }
                                     }
                                 }
+                                
+                                System.debug('🔍 STRING PROCESSING: Missing fields BEFORE removal: ' + fieldsBeforeRemoval);
+                                System.debug('🔍 STRING PROCESSING: Missing fields AFTER removal: ' + missingFields);
+                                System.debug('🔍 STRING PROCESSING: Should remove record? ' + missingFields.isEmpty());
 
                                 // Reconstruct the JSON string
                                 if (missingFields.isEmpty()) {
+                                    System.debug('✅ STRING PROCESSING: Removing entire record ' + recIdStr + ' from payload');
                                     // Remove entire record entry
                                     String beforeRecord = payloadStr.substring(0, startIndex);
                                     String afterRecord = payloadStr.substring(bracketEnd + 1);
@@ -839,7 +902,9 @@
 
                                     payloadStr = beforeRecord + afterRecord;
                                     removedRecordsStr++;
+                                    System.debug('✅ STRING PROCESSING: Record ' + recIdStr + ' completely removed from payload');
                                 } else {
+                                    System.debug('⚠️ STRING PROCESSING: Updating record ' + recIdStr + ' with remaining fields: ' + missingFields);
                                     // Update the fields array
                                     String newFieldsStr = '"' + String.join(missingFields, '","') + '"';
                                     String beforeBracket = payloadStr.substring(0, bracketStart + 1);
@@ -850,6 +915,8 @@
                             }
                         }
                     }
+                } else {
+                    System.debug('🔍 STRING PROCESSING: Record ' + recIdStr + ' NOT found in payload');
                 }
             }
 
