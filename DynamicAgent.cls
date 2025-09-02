@@ -325,9 +325,14 @@
 
         // Remove updated fields from payloads only if record had no errors
         Map<Id, List<String>> cleanUpdatedMap = new Map<Id, List<String>>();
+        System.debug('🔧 START: updatedFieldsPerRecord size: ' + updatedFieldsPerRecord.size());
+        System.debug('🔧 START: result.fieldErrors size: ' + result.fieldErrors.size());
+        
         for (String recordId : updatedFieldsPerRecord.keySet()) {
+            System.debug('🔧 Checking record: ' + recordId + ', has errors: ' + result.fieldErrors.containsKey(recordId));
             if (!result.fieldErrors.containsKey(recordId)) {
                 cleanUpdatedMap.put((Id) recordId, updatedFieldsPerRecord.get(recordId));
+                System.debug('🔧 Added to clean map: ' + recordId);
             }
         }
 
