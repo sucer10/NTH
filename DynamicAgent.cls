@@ -763,9 +763,10 @@
                                 if (upd != null) {
                                     List<String> fieldsBeforeRemoval = new List<String>(missingFields);
                                     for (String field : upd) {
+                                        // Remove all occurrences of the field (case-insensitive)
                                         for (Integer i = missingFields.size() - 1; i >= 0; i--) {
-                                            if (missingFields[i] == field) {
-                                                System.debug('🔍 MAP PROCESSING: Removing field "' + field + '" from missing fields');
+                                            if (missingFields[i].equalsIgnoreCase(field)) {
+                                                System.debug('🔍 MAP PROCESSING: Removing field "' + field + '" (matches "' + missingFields[i] + '") from missing fields');
                                                 missingFields.remove(i);
                                             }
                                         }
@@ -869,13 +870,13 @@
                                 System.debug('🔍 STRING PROCESSING: Parsed missing fields for ' + recIdStr + ': ' + missingFields);
                                 System.debug('🔍 STRING PROCESSING: Fields to remove: ' + updatedFieldsByRecordId.get(recId));
 
-                                // Remove updated fields
+                                // Remove updated fields (case-insensitive comparison)
                                 List<String> fieldsBeforeRemoval = new List<String>(missingFields);
                                 for (String field : updatedFieldsByRecordId.get(recId)) {
-                                    // Remove all occurrences of the field
+                                    // Remove all occurrences of the field (case-insensitive)
                                     for (Integer i = missingFields.size() - 1; i >= 0; i--) {
-                                        if (missingFields[i] == field) {
-                                            System.debug('🔍 STRING PROCESSING: Removing field "' + field + '" from missing fields');
+                                        if (missingFields[i].equalsIgnoreCase(field)) {
+                                            System.debug('🔍 STRING PROCESSING: Removing field "' + field + '" (matches "' + missingFields[i] + '") from missing fields');
                                             missingFields.remove(i);
                                         }
                                     }
