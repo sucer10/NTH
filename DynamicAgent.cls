@@ -486,6 +486,8 @@
         Map<Id, List<String>> updatedFieldsByRecordId, 
         Map<Id, Id> recordToOwnerMap
     ) {
+        System.debug('🚀 METHOD ENTRY: getRecordsResolvedAfterUpdate');
+        
         Map<Id, Integer> userToResolvedRecordsCount = new Map<Id, Integer>();
         
         System.debug('🚀 getRecordsResolvedAfterUpdate STARTED');
