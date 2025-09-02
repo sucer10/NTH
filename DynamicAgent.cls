@@ -387,8 +387,7 @@
 
     /**
      * @description Update user validation counts in Object_Tracker__c.User_Record_Summary__c
-     * after successful record updates. This method counts records that had missing fields
-     * and were successfully updated, checking if they still have missing fields after the update.
+     * after successful record updates. Simply counts updated records per owner and decreases the count.
      * @param trackerId The Object_Tracker__c record ID
      * @param updatedFieldsByRecordId Map of record IDs to list of updated fields
      */
@@ -400,7 +399,7 @@
         try {
             // Get the Object_Tracker__c record with current User_Record_Summary__c
             List<Object_Tracker__c> trackers = [
-                SELECT Id, User_Record_Summary__c 
+                SELECT Id, Name, User_Record_Summary__c 
                 FROM Object_Tracker__c 
                 WHERE Id = :trackerId 
                 WITH SECURITY_ENFORCED
@@ -408,10 +407,13 @@
             ];
 
             if (trackers.isEmpty() || String.isBlank(trackers[0].User_Record_Summary__c)) {
+                System.debug('🔧 No tracker found or User_Record_Summary__c is blank for tracker: ' + trackerId);
                 return;
             }
 
             Object_Tracker__c tracker = trackers[0];
+            System.debug('🔧 Processing tracker: ' + tracker.Id + ' (' + tracker.Name + ')');
+            System.debug('🔧 Current User_Record_Summary__c: ' + tracker.User_Record_Summary__c);
             
             // Parse the current user validation JSON
             Map<String, Object> userValidationMap;
@@ -425,13 +427,26 @@
             // Get owner information for the updated records
             Set<Id> recordIds = updatedFieldsByRecordId.keySet();
             Map<Id, Id> recordToOwnerMap = getRecordOwners(recordIds);
+            System.debug('🔧 Record to owner mapping: ' + recordToOwnerMap);
 
-            // Count how many records were completely resolved by checking payload
-            Map<Id, Integer> userToResolvedRecordsCount = getRecordsResolvedAfterUpdate(trackerId, updatedFieldsByRecordId, recordToOwnerMap);
+            // Count updated records per owner (simple approach)
+            Map<Id, Integer> userToUpdatedRecordsCount = new Map<Id, Integer>();
+            for (Id recordId : updatedFieldsByRecordId.keySet()) {
+                Id ownerId = recordToOwnerMap.get(recordId);
+                if (ownerId != null) {
+                    if (userToUpdatedRecordsCount.containsKey(ownerId)) {
+                        userToUpdatedRecordsCount.put(ownerId, userToUpdatedRecordsCount.get(ownerId) + 1);
+                    } else {
+                        userToUpdatedRecordsCount.put(ownerId, 1);
+                    }
+                }
+            }
+            
+            System.debug('🔧 Updated records count per user: ' + userToUpdatedRecordsCount);
 
             // Update the user validation counts
             Boolean hasChanges = false;
-            for (Id userId : userToResolvedRecordsCount.keySet()) {
+            for (Id userId : userToUpdatedRecordsCount.keySet()) {
                 String userIdStr = String.valueOf(userId);
                 if (userValidationMap.containsKey(userIdStr)) {
                     String currentValue = String.valueOf(userValidationMap.get(userIdStr));
@@ -441,17 +456,16 @@
                             try {
                                 Integer currentMissing = Integer.valueOf(parts[0]);
                                 Integer totalRecords = Integer.valueOf(parts[1]);
-                                Integer resolvedRecords = userToResolvedRecordsCount.get(userId);
+                                Integer updatedRecords = userToUpdatedRecordsCount.get(userId);
                                 
-                                // Decrease missing count by the number of records that were completely resolved
-                                Integer newMissing = Math.max(0, currentMissing - resolvedRecords);
+                                // Decrease missing count by the number of records updated
+                                Integer newMissing = Math.max(0, currentMissing - updatedRecords);
                                 
                                 String newValue = newMissing + '/' + totalRecords;
                                 userValidationMap.put(userIdStr, newValue);
                                 hasChanges = true;
                                 
-                                System.debug('Updated user validation for ' + userIdStr + ': ' + currentValue + ' -> ' + newValue + ' (Resolved ' + resolvedRecords + ' records completely)');
-                                
+                                System.debug('Updated user validation for ' + userIdStr + ': ' + currentValue + ' -> ' + newValue + ' (Updated ' + updatedRecords + ' records)');
 
                             } catch (Exception e) {
                                 System.debug('Error updating count for user ' + userIdStr + ': ' + e.getMessage());
@@ -465,6 +479,7 @@
             if (hasChanges) {
                 tracker.User_Record_Summary__c = JSON.serialize(userValidationMap);
                 update tracker;
+                System.debug('🔧 Updated tracker User_Record_Summary__c: ' + tracker.User_Record_Summary__c);
             }
 
         } catch (Exception e) {
