@@ -623,37 +623,24 @@ public without sharing class WithoutAgentForceCntr {
                 Integer removedRecordsStr = 0;
                 Integer beforeCountStr = 0;
                 if (String.isNotBlank(payloadStr)) {
-                    Integer idxScan = 0;
-                    String marker = '":\["';
-                    while (true) {
-                        Integer pos = payloadStr.indexOf(marker, idxScan);
-                        if (pos == -1) break;
+                    Matcher keyMatcherBefore = Pattern.compile('\"[a-zA-Z0-9]{15,18}\"\\s*:\\s*\\[').matcher(payloadStr);
+                    while (keyMatcherBefore.find()) {
                         beforeCountStr++;
-                        idxScan = pos + marker.length();
                     }
                 }
 
                 Boolean anyChange = false;
                 for (Id recId : ownerRecIds) {
                     String recIdStr = (String)recId;
-                    if (!payloadStr.contains('"' + recIdStr + '":')) {
+                    // Whitespace-tolerant match for: "<Id>" : [
+                    Matcher m = Pattern.compile('"' + recIdStr + '"\\s*:\\s*\\[').matcher(payloadStr);
+                    if (!m.find()) {
                         continue;
                     }
 
-                    // Find the record entry in the JSON string using Apex methods
-                    String searchKey = '"' + recIdStr + '":';
-                    Integer startIndex = payloadStr.indexOf(searchKey);
-                    if (startIndex == -1) {
-                        continue;
-                    }
-
-                    // Find the opening bracket after the key
-                    Integer bracketStart = payloadStr.indexOf('[', startIndex);
-                    if (bracketStart == -1) {
-                        continue;
-                    }
-
-                    // Find the closing bracket
+                    Integer startIndex = m.start();
+                    Integer bracketStart = m.end() - 1; // points at '['
+                    // Find the closing bracket for the array
                     Integer bracketEnd = payloadStr.indexOf(']', bracketStart);
                     if (bracketEnd == -1) {
                         continue;
@@ -684,20 +671,48 @@ public without sharing class WithoutAgentForceCntr {
 
                     // Reconstruct the JSON string
                     if (missingFields.isEmpty()) {
-                        // Remove entire record entry: handle commas around the entry robustly
+                        // Remove entire record entry: include optional surrounding whitespace and comma
                         Integer entryStart = startIndex;
-                        // include preceding comma if present
+                        // expand backward over whitespace
+                        while (entryStart > 0) {
+                            String ch = payloadStr.substring(entryStart - 1, entryStart);
+                            if (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t') {
+                                entryStart = entryStart - 1;
+                            } else {
+                                break;
+                            }
+                        }
+                        // include preceding comma if present after trimming whitespace
                         if (entryStart > 0 && payloadStr.substring(entryStart - 1, entryStart) == ',') {
                             entryStart = entryStart - 1;
+                            // also trim any whitespace before the comma
+                            while (entryStart > 0) {
+                                String ch2 = payloadStr.substring(entryStart - 1, entryStart);
+                                if (ch2 == ' ' || ch2 == '\n' || ch2 == '\r' || ch2 == '\t') {
+                                    entryStart = entryStart - 1;
+                                } else {
+                                    break;
+                                }
+                            }
                         }
+
                         Integer entryEnd = bracketEnd + 1;
+                        // expand forward over whitespace
+                        while (entryEnd < payloadStr.length()) {
+                            String chf = payloadStr.substring(entryEnd, entryEnd + 1);
+                            if (chf == ' ' || chf == '\n' || chf == '\r' || chf == '\t') {
+                                entryEnd = entryEnd + 1;
+                            } else {
+                                break;
+                            }
+                        }
                         // include trailing comma if present
                         if (entryEnd < payloadStr.length() && payloadStr.substring(entryEnd, entryEnd + 1) == ',') {
                             entryEnd = entryEnd + 1;
                         }
 
                         String beforeRecord = payloadStr.substring(0, entryStart);
-                        String afterRecord = payloadStr.substring(entryEnd);
+                        String afterRecord = payloadStr.substring(Math.min(entryEnd, payloadStr.length()));
                         payloadStr = beforeRecord + afterRecord;
                         removedRecordsStr++;
                         anyChange = true;
@@ -727,13 +742,9 @@ public without sharing class WithoutAgentForceCntr {
                     toUpdate.add(item);
                     Integer afterCountStr = 0;
                     if (String.isNotBlank(item.Payload__c)) {
-                        Integer idxScan2 = 0;
-                        String marker2 = '":\["';
-                        while (true) {
-                            Integer pos2 = item.Payload__c.indexOf(marker2, idxScan2);
-                            if (pos2 == -1) break;
+                        Matcher keyMatcherAfter = Pattern.compile('\"[a-zA-Z0-9]{15,18}\"\\s*:\\s*\\[').matcher(item.Payload__c);
+                        while (keyMatcherAfter.find()) {
                             afterCountStr++;
-                            idxScan2 = pos2 + marker2.length();
                         }
                     }
                     
