@@ -405,31 +405,51 @@ if (!result.fieldErrors.isEmpty()) {
                 WITH SECURITY_ENFORCED
             ];
 
-            // For each owner, check which updated records are no longer in their payload
+            // Group all payloads by owner to avoid double counting
+            Map<Id, List<Owner_based_Line_Items__c>> ownerToPayloads = new Map<Id, List<Owner_based_Line_Items__c>>();
             for (Owner_based_Line_Items__c item : items) {
                 Id ownerId = item.OwnerRecordId__c;
+                if (!ownerToPayloads.containsKey(ownerId)) {
+                    ownerToPayloads.put(ownerId, new List<Owner_based_Line_Items__c>());
+                }
+                ownerToPayloads.get(ownerId).add(item);
+            }
+
+            // Process each owner only once, checking all their payloads
+            for (Id ownerId : ownerToPayloads.keySet()) {
+                List<Owner_based_Line_Items__c> ownerPayloads = ownerToPayloads.get(ownerId);
                 Integer resolvedCount = 0;
 
                 // Check each record that was updated for this owner
                 for (Id recordId : updatedFieldsByRecordId.keySet()) {
                     if (recordToOwnerMap.get(recordId) == ownerId) {
-                        // Check if this record is no longer in the payload (completely resolved)
                         String recordIdStr = String.valueOf(recordId);
-                        Boolean recordStillInPayload = false;
                         
-                        if (String.isNotBlank(item.Payload__c) && item.Payload__c != '{}' && item.Payload__c != '[]') {
-                            recordStillInPayload = item.Payload__c.contains('"' + recordIdStr + '":');
+                        // Check if this record is still in ANY of the owner's payloads
+                        Boolean recordStillInAnyPayload = false;
+                        
+                        for (Owner_based_Line_Items__c item : ownerPayloads) {
+                            if (String.isNotBlank(item.Payload__c) && item.Payload__c != '{}' && item.Payload__c != '[]') {
+                                if (item.Payload__c.contains('"' + recordIdStr + '":')) {
+                                    recordStillInAnyPayload = true;
+                                    break; // Found in one payload, no need to check others
+                                }
+                            }
                         }
                         
-                        if (!recordStillInPayload) {
-                            // Record was completely removed from payload (all missing fields resolved)
+                        if (!recordStillInAnyPayload) {
+                            // Record was completely removed from ALL payloads (all missing fields resolved)
                             resolvedCount++;
+                            System.debug('✅ Record ' + recordIdStr + ' completely resolved for owner ' + ownerId);
+                        } else {
+                            System.debug('⚠️ Record ' + recordIdStr + ' still has missing fields for owner ' + ownerId);
                         }
                     }
                 }
 
                 if (resolvedCount > 0) {
                     userToResolvedRecordsCount.put(ownerId, resolvedCount);
+                    System.debug('🎯 Owner ' + ownerId + ' had ' + resolvedCount + ' records completely resolved - COUNT WILL DECREASE BY ' + resolvedCount);
                 }
             }
 
