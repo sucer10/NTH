@@ -533,44 +533,195 @@ if (!result.fieldErrors.isEmpty()) {
 
         ];
         List<Owner_based_Line_Items__c> toUpdate = new List<Owner_based_Line_Items__c>();
+
+        // Process each item once to avoid multiple deserializations
         for (Owner_based_Line_Items__c item : items) {
             if (String.isBlank(item.Payload__c)){
                 continue;
             }
-            Map<String, Object> payload = (Map<String, Object>) JSON.deserializeUntyped(item.Payload__c);
+
+            // Check payload size - use string operations for large payloads instead of skipping
+            Boolean isLargePayload = item.Payload__c.length() > 25000;
+            if (isLargePayload) {
+                System.debug('Processing large payload with string operations: ' + item.Id + ' size: ' + item.Payload__c.length());
+            }
+
+            // Process payload; prefer small-payload Map-based path, fall back to string ops for larger payloads
+            String payloadStr = item.Payload__c;
             Boolean changed = false;
-            for (Id recId : ownerToRecordIds.get(item.OwnerRecordId__c)) {
-                if (payload.containsKey((String)recId)) {
-                    List<Object> missingFieldsObj = (List<Object>) payload.get((String)recId);
-                    // Convert to List<String> for easier removal
-                    List<String> missingFields = new List<String>();
-                    for (Object o : missingFieldsObj) {
-                        missingFields.add(String.valueOf(o));
+
+            try {
+                // Try Map-based approach first for small payloads only
+                if (!isLargePayload && item.Payload__c.length() <= 12000) {
+                    try {
+                        Map<String, Object> payload = (Map<String, Object>) JSON.deserializeUntyped(payloadStr);
+                        if (payload != null) {
+                            Integer beforeCount = payload.size();
+                            List<Id> recList = ownerToRecordIds.containsKey(item.OwnerRecordId__c) ? ownerToRecordIds.get(item.OwnerRecordId__c) : new List<Id>();
+                            for (Id recId : recList) {
+                                String recKey = (String)recId;
+                                if (payload.containsKey(recKey)) {
+                                    List<Object> missingFieldsObj = (List<Object>) payload.get(recKey);
+                                    List<String> missingFields = new List<String>();
+                                    if (missingFieldsObj != null) {
+                                        for (Object o : missingFieldsObj) {
+                                            missingFields.add(String.valueOf(o));
+                                        }
+                                    }
+                                    List<String> upd = updatedFieldsByRecordId.get(recId);
+                                    if (upd != null) {
+                                        for (String field : upd) {
+                                            for (Integer i = missingFields.size() - 1; i >= 0; i--) {
+                                                if (missingFields[i] == field) {
+                                                    missingFields.remove(i);
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (missingFields.isEmpty()) {
+                                        payload.remove(recKey);
+                                    } else {
+                                        List<Object> newMissingFieldsObj = new List<Object>();
+                                        for (String s : missingFields) {
+                                            newMissingFieldsObj.add(s);
+                                        }
+                                        payload.put(recKey, newMissingFieldsObj);
+                                    }
+                                    changed = true;
+                                }
+                            }
+                            if (changed) {
+                                Integer afterCount = payload.size();
+                                Integer removedRecords = beforeCount - afterCount;
+                                item.Payload__c = payload.isEmpty() ? null : JSON.serialize(payload);
+                                payloadStr = item.Payload__c == null ? '{}' : item.Payload__c;
+                                toUpdate.add(item);
+                                
+                                System.debug('Owner ' + String.valueOf(item.OwnerRecordId__c) + ' Item ' + item.Id + ' (map) before=' + beforeCount + ' after=' + afterCount + ' removed=' + removedRecords);
+                                // Avoid processing the same item again via string path which can cause duplicate DML IDs
+                                continue;
+                            }
+                        }
+                    } catch (Exception ex) {
+                        changed = false; // fallback to string path below
                     }
-                    for (String field : updatedFieldsByRecordId.get(recId)) {
-                        // Remove all occurrences of the field
-                        for (Integer i = missingFields.size() - 1; i >= 0; i--) {
-                            if (missingFields[i] == field) {
-                                missingFields.remove(i);
+                }
+
+                // String-based processing for large payloads
+                List<Id> ownerRecIds = ownerToRecordIds.containsKey(item.OwnerRecordId__c) ? ownerToRecordIds.get(item.OwnerRecordId__c) : new List<Id>();
+                Integer removedRecordsStr = 0;
+                Integer beforeCountStr = 0;
+                if (String.isNotBlank(payloadStr)) {
+                    Integer idxScan = 0;
+                    String marker = '\":[\"';
+                    while (true) {
+                        Integer pos = payloadStr.indexOf(marker, idxScan);
+                        if (pos == -1) break;
+                        beforeCountStr++;
+                        idxScan = pos + marker.length();
+                    }
+                }
+                for (Id recId : ownerRecIds) {
+                    if (changed) { break; }
+                    String recIdStr = (String)recId;
+                    if (payloadStr.contains('"' + recIdStr + '"')) {
+                        // Find the record entry in the JSON string using Apex methods
+                        String searchKey = '"' + recIdStr + '":';
+                        Integer startIndex = payloadStr.indexOf(searchKey);
+
+                        if (startIndex != -1) {
+                            // Find the opening bracket after the key
+                            Integer bracketStart = payloadStr.indexOf('[', startIndex);
+                            if (bracketStart != -1) {
+                                // Find the closing bracket
+                                Integer bracketEnd = payloadStr.indexOf(']', bracketStart);
+                                if (bracketEnd != -1) {
+                                    // Extract the fields string
+                                    String fieldsStr = payloadStr.substring(bracketStart + 1, bracketEnd);
+                                    List<String> missingFields = new List<String>();
+
+                                    // Parse fields from the string
+                                    if (String.isNotBlank(fieldsStr)) {
+                                        String[] fieldParts = fieldsStr.split(',');
+                                        for (String field : fieldParts) {
+                                            field = field.trim().replaceAll('"', '');
+                                            if (String.isNotBlank(field)) {
+                                                missingFields.add(field);
+                                            }
+                                        }
+                                    }
+
+                                    // Remove updated fields
+                                    for (String field : updatedFieldsByRecordId.get(recId)) {
+                                        // Remove all occurrences of the field
+                                        for (Integer i = missingFields.size() - 1; i >= 0; i--) {
+                                            if (missingFields[i] == field) {
+                                                missingFields.remove(i);
+                                            }
+                                        }
+                                    }
+
+                                    // Reconstruct the JSON string
+                                    if (missingFields.isEmpty()) {
+                                        // Remove entire record entry
+                                        String beforeRecord = payloadStr.substring(0, startIndex);
+                                        String afterRecord = payloadStr.substring(bracketEnd + 1);
+
+                                        // Remove trailing comma if present
+                                        if (beforeRecord.endsWith(',')) {
+                                            beforeRecord = beforeRecord.substring(0, beforeRecord.length() - 1);
+                                        }
+                                        if (afterRecord.startsWith(',')) {
+                                            afterRecord = afterRecord.substring(1);
+                                        }
+
+                                        payloadStr = beforeRecord + afterRecord;
+                                        removedRecordsStr++;
+                                    } else {
+                                        // Update the fields array
+                                        String newFieldsStr = '"' + String.join(missingFields, '","') + '"';
+                                        String beforeBracket = payloadStr.substring(0, bracketStart + 1);
+                                        String afterBracket = payloadStr.substring(bracketEnd);
+                                        payloadStr = beforeBracket + newFieldsStr + afterBracket;
+                                    }
+                                    changed = true;
+                                }
                             }
                         }
                     }
-                    if (missingFields.isEmpty()) {
-                        payload.remove((String)recId);
-                    } else {
-                        // Convert back to List<Object> for serialization
-                        List<Object> newMissingFieldsObj = new List<Object>();
-                        for (String s : missingFields) {
-                            newMissingFieldsObj.add(s);
-                        }
-                        payload.put((String)recId, newMissingFieldsObj);
-                    }
-                    changed = true;
                 }
-            }
-            if (changed) {
-                item.Payload__c = payload.isEmpty() ? null : JSON.serialize(payload);
-                toUpdate.add(item);
+
+                // Clean up the JSON string
+                if (changed) {
+                    // Remove trailing commas and clean up using Apex methods
+                    payloadStr = payloadStr.replace(',}', '}');
+                    payloadStr = payloadStr.replace(',]', ']');
+                    payloadStr = payloadStr.replace('{,}', '{}');
+
+                    if (payloadStr.trim() == '{}' || payloadStr.trim() == '' || payloadStr.trim() == '[]') {
+                        item.Payload__c = null;
+                    } else {
+                        item.Payload__c = payloadStr;
+                    }
+                    toUpdate.add(item);
+                    Integer afterCountStr = 0;
+                    if (String.isNotBlank(item.Payload__c)) {
+                        Integer idxScan2 = 0;
+                        String marker2 = '\":[\"';
+                        while (true) {
+                            Integer pos2 = item.Payload__c.indexOf(marker2, idxScan2);
+                            if (pos2 == -1) break;
+                            afterCountStr++;
+                            idxScan2 = pos2 + marker2.length();
+                        }
+                    }
+                    
+                    System.debug('Owner ' + String.valueOf(item.OwnerRecordId__c) + ' Item ' + item.Id + ' (string) before=' + beforeCountStr + ' after=' + afterCountStr + ' removed=' + removedRecordsStr);
+                }
+            } catch (Exception e) {
+                System.debug('Error processing payload for item ' + item.Id + ': ' + e.getMessage());
+                // Skip this item if there's an error
+                continue;
             }
         }
        if (!toUpdate.isEmpty()) {
