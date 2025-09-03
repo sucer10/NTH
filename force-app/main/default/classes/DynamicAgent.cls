@@ -419,7 +419,9 @@ public without sharing class DynamicAgent {
     ) {
         Map<Id, Integer> userToResolvedRecordsCount = new Map<Id, Integer>();
         try {
-            Set<Id> ownerIds = new Set<Id>(recordToOwnerMap.values());
+            // Derive owner ids from payload rows to avoid mismatches with record OwnerId
+            Set<Id> ownerIds = new Set<Id>();
+            ownerIds.addAll(recordToOwnerMap.values());
             List<Owner_based_Line_Items__c> items = [
                 SELECT Id, OwnerRecordId__c, Payload__c
                 FROM Owner_based_Line_Items__c
@@ -442,20 +444,20 @@ public without sharing class DynamicAgent {
                 Integer resolvedCount = 0;
 
                 for (Id recordId : updatedFieldsByRecordId.keySet()) {
-                    if (recordToOwnerMap.get(recordId) == ownerId) {
-                        String recordIdStr = String.valueOf(recordId);
-                        Boolean recordStillInAnyPayload = false;
-                        for (Owner_based_Line_Items__c item : ownerPayloads) {
-                            if (String.isNotBlank(item.Payload__c) && item.Payload__c != '{}' && item.Payload__c != '[]') {
-                                if (item.Payload__c.contains('"' + recordIdStr + '":')) {
-                                    recordStillInAnyPayload = true;
-                                    break;
-                                }
+                    String recordIdStr = String.valueOf(recordId);
+                    // Whitespace-tolerant presence check: "<Id>" : [
+                    Pattern presencePattern = Pattern.compile('"' + recordIdStr + '"\\s*:\\s*\\[');
+                    Boolean recordStillInAnyPayload = false;
+                    for (Owner_based_Line_Items__c item : ownerPayloads) {
+                        if (String.isNotBlank(item.Payload__c) && item.Payload__c != '{}' && item.Payload__c != '[]') {
+                            if (presencePattern.matcher(item.Payload__c).find()) {
+                                recordStillInAnyPayload = true;
+                                break;
                             }
                         }
-                        if (!recordStillInAnyPayload) {
-                            resolvedCount++;
-                        }
+                    }
+                    if (!recordStillInAnyPayload) {
+                        resolvedCount++;
                     }
                 }
                 if (resolvedCount > 0) {
