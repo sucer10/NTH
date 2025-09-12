@@ -40,7 +40,7 @@ private class DynamicAgentTest {
             Test.stopTest();
             System.assert(false, 'Expected exception for null input');
         } catch (AuraHandledException e) {
-            System.assert(e.getMessage().contains('cannot be null'), 'Should complain about null/empty');
+            System.assertEquals('recordId cannot be null or empty', e.getMessage(), 'Should complain about null/empty');
         }
 
         // Empty list
@@ -50,7 +50,7 @@ private class DynamicAgentTest {
             Test.stopTest();
             System.assert(false, 'Expected exception for empty list');
         } catch (AuraHandledException e) {
-            System.assert(e.getMessage().contains('cannot be null'), 'Should complain about null/empty');
+            System.assertEquals('recordId cannot be null or empty', e.getMessage(), 'Should complain about null/empty');
         }
 
         // Invalid Id format (length < 3)
@@ -60,7 +60,7 @@ private class DynamicAgentTest {
             Test.stopTest();
             System.assert(false, 'Expected exception for invalid Id format');
         } catch (AuraHandledException e) {
-            System.assert(e.getMessage().contains('Invalid record ID'), 'Should complain about invalid format');
+            System.assertEquals('Invalid record ID format', e.getMessage(), 'Should complain about invalid format');
         }
     }
 
